@@ -1,5 +1,4 @@
 import sys
-import os
 import cv2
 import numpy as np
 from PIL import ImageGrab
@@ -21,8 +20,8 @@ def imread_unicode(path):
 
 
 class Worker(QThread):
-    image_found = pyqtSignal(tuple)  # 이미지 발견 시 좌표 전달
-    log_signal = pyqtSignal(str)     # 디버깅 로그 전달용
+    image_found = pyqtSignal(tuple)
+    log_signal = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -40,28 +39,54 @@ class Worker(QThread):
 
     def run(self):
         self.running = True
-        threshold = 0.8
+        base_threshold = 0.65
         self.log_signal.emit("실시간 감지 시작")
+
+        scales = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+                  1.1, 1.2, 1.3, 1.5, 1.7, 2.0]
+
         while self.running:
             screen = ImageGrab.grab()
             screen_np = np.array(screen)
             frame = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            h_frame, w_frame = gray_frame.shape[:2]
+
             if self.template is not None:
-                res = cv2.matchTemplate(gray_frame, self.template, cv2.TM_CCOEFF_NORMED)
-                loc = np.where(res >= threshold)
                 found = False
-                for pt in zip(*loc[::-1]):
-                    center_x = pt[0] + self.w // 2
-                    center_y = pt[1] + self.h // 2
-                    self.image_found.emit((center_x, center_y))
-                    self.log_signal.emit(f"이미지 발견 좌표: ({center_x}, {center_y})")
-                    found = True
-                    time.sleep(2)  # 중복 클릭 방지
-                    break
+                for scale in scales:
+                    w_scaled = int(self.w * scale)
+                    h_scaled = int(self.h * scale)
+
+                    # 캡처 화면보다 템플릿 크기가 크면 매칭하지 않음
+                    if w_scaled < 10 or h_scaled < 10:
+                        continue
+                    if w_scaled > w_frame or h_scaled > h_frame:
+                        continue
+
+                    resized_template = cv2.resize(self.template, (w_scaled, h_scaled))
+
+                    res = cv2.matchTemplate(gray_frame, resized_template, cv2.TM_CCOEFF_NORMED)
+                    loc = np.where(res >= base_threshold)
+
+                    for pt in zip(*loc[::-1]):
+                        center_x = pt[0] + w_scaled // 2
+                        center_y = pt[1] + h_scaled // 2
+                        self.image_found.emit((center_x, center_y))
+                        self.log_signal.emit(f"이미지 발견 좌표: ({center_x}, {center_y}), 스케일: {scale:.2f}")
+                        found = True
+                        time.sleep(2)
+                        break
+
+                    if found:
+                        break
+
                 if not found:
                     self.log_signal.emit("이미지 미발견")
+
             time.sleep(0.1)
+
         self.log_signal.emit("실시간 감지 종료")
 
     def stop(self):
@@ -95,7 +120,6 @@ class AppDemo(QWidget):
         btn_stop.clicked.connect(self.stop_worker)
         layout.addWidget(btn_stop)
 
-        # 로그 표시용 라벨
         self.log_label = QLabel('')
         self.log_label.setFixedHeight(80)
         self.log_label.setStyleSheet("border: 1px solid lightgray; padding: 5px;")
